@@ -1,7 +1,8 @@
+import jwt from "jsonwebtoken";
 import { sendMail } from "../config/sendMail.js";
 import User from "../model/user.js";
 
-// Format  to detect role from userId
+// 🔹 Helper: Detect role from userId
 const getRoleFromUserId = (userId) => {
   if (userId.startsWith("STU")) return "parent";
   if (userId.startsWith("TCH")) return "teacher";
@@ -9,7 +10,21 @@ const getRoleFromUserId = (userId) => {
   return null;
 };
 
-//  Registers and Sends Login 
+// 🔹 Helper: Generate JWT
+const generateToken = (user) => {
+    if (!process.env.JWT_SECRET) {
+    throw new Error("JWT secret is missing");
+  }
+  return jwt.sign(
+    { id: user._id, role: user.role },
+    process.env.JWT_SECRET,
+    { expiresIn: "7d" }
+  );
+};
+
+// =====================================
+//  ADMIN REGISTER
+// =====================================
 export const adminRegister = async (req, res, next) => {
   const { firstName, lastName, email, phoneNumber, userId } = req.body;
 
@@ -18,43 +33,26 @@ export const adminRegister = async (req, res, next) => {
   }
 
   try {
-    // Check for duplicate
     const existingUser = await User.findOne({ userId });
     if (existingUser) {
       return res.status(400).json({ message: "User ID already exists." });
     }
 
-    // Detect role from the format 
     const role = getRoleFromUserId(userId);
     if (!role) {
-      return res.status(400).json({ message: "Invalid user ID format. Cannot determine role." });
+      return res.status(400).json({ message: "Invalid user ID format." });
     }
 
-    // Create user
-    const user = new User({
-      firstName,
-      lastName,
-      email,
-      phoneNumber,
-      userId,
-      role,
-    });
+    const user = new User({ firstName, lastName, email, phoneNumber, userId, role });
 
-    // Generate and hash temporary password
+    // Generate temporary password
     const tempPass = await user.generateTempPass();
     await user.save();
 
-    //  login link ACCORDING TO role
-    let link;
-    if (role === "parent") {
-      link = `${req.protocol}://localhost:5173/login/${userId}`;
-    } else if (role === "teacher") {
-      link = `${req.protocol}://localhost:5173/login/${userId}`;
-    } else {
-      link = `http://your-frontend.com/admin/dashboard/${userId}`;
-    }
+    // Login link (temporary)
+    const link = `${req.protocol}://localhost:5173/login/${userId}`;
 
-    // Send  email for log in credentials
+    // Send email
     const subject = "Login Credentials";
     const html = `
       <p>Dear ${firstName},</p>
@@ -64,14 +62,9 @@ export const adminRegister = async (req, res, next) => {
       <p><a href="${link}">Click here to log in</a> and please change your password after logging in.</p>
     `;
 
-    // Send email
-    await sendMail({
-      to: email,
-      subject,
-      html,
-    });
+    await sendMail({ to: email, subject, html });
 
-    return res.status(201).json({
+    res.status(201).json({
       success: true,
       message: `User registered successfully as ${role}. Login credentials sent to email.`,
     });
@@ -80,48 +73,140 @@ export const adminRegister = async (req, res, next) => {
   }
 };
 
-
-
-//User Logs in with given username and temp password
+// =====================================
+//  USER LOGIN (with JWT + cookie)
+// =====================================
 export const login = async (req, res, next) => {
   const { userId, password } = req.body;
 
   if (!userId || !password) {
-    const error = new Error('Username and Password required');
+    const error = new Error("Username and Password required");
     error.statusCode = 400;
     return next(error);
   }
 
   try {
     const user = await User.findOne({ userId });
-
     if (!user) {
-      const error = new Error('Username or Password Incorrect');
+      const error = new Error("Username or Password Incorrect");
       error.statusCode = 401;
       return next(error);
     }
-
-    // 🔍 Debug logs
-    console.log("User found:", user.userId);
-    console.log("Stored hash:", user.tempPassword);
-    console.log("Input password:", password);
 
     const isMatching = await user.isMatch(password);
-
     if (!isMatching) {
-      const error = new Error('Username or Password Incorrect');
+      const error = new Error("Username or Password Incorrect");
       error.statusCode = 401;
       return next(error);
     }
 
-    res.status(200).json({
-      message: 'Login successful. Please set a new password.',
-      userId: user.userId,
-      role: user.role,
-      status: user.status
+    // 🔹 Generate JWT token
+    const token = generateToken(user);
+
+    // 🔹 Send cookie
+    res.cookie("jwt", token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
+    // 🔹 Response
+    res.status(200).json({
+      success: true,
+      message: "Login successful",
+      token,
+      user: {
+        userId: user.userId,
+        role: user.role,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+        grade: user.grade,
+        subjectsTaught: user.subjectsTaught,
+        profilePicture: user.profilePicture,
+      },
+    });
   } catch (error) {
     next(error);
+  }
+};
+
+// =====================================
+//  PROFILE UPDATE
+// =====================================
+export const updateProfile = async (req, res, next) => {
+  try {
+    const { userId } = req.body;
+    const { firstName, lastName, phoneNumber, grade, subjectsTaught, profilePicture } = req.body;
+
+    const user = await User.findOne({ userId });
+    if (!user) {
+      const error = new Error("User not found");
+      error.statusCode = 404;
+      return next(error);
+    }
+
+    if (firstName) user.firstName = firstName;
+    if (lastName) user.lastName = lastName;
+    if (phoneNumber) user.phoneNumber = phoneNumber;
+    if (grade) user.grade = grade;
+    if (subjectsTaught) user.subjectsTaught = subjectsTaught;
+    if (profilePicture) user.profilePicture = profilePicture;
+
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Profile updated successfully.",
+      user: {
+        userId: user.userId,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+        role: user.role,
+        grade: user.grade,
+        subjectsTaught: user.subjectsTaught,
+        profilePicture: user.profilePicture,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// =====================================
+//  PROFILE IMAGE UPLOAD
+// =====================================
+export const profileUpload = async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user._id);
+    user.profilePic = `uploads/${req.file.filename}`;
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      message: "File uploaded successfully",
+      profilePic: user.profilePic,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getProfile = async (req, res) => {
+  try {
+    // req.user is added by routeProtect middleware
+    res.status(200).json({
+      success: true,
+      user: req.user,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch profile",
+    });
   }
 };

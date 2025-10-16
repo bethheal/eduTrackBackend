@@ -55,7 +55,20 @@ const userSchema = new Schema({
     enum: ["pending", "approved", "rejected"],
     default: "pending",
   },
+  grade:{
+    type: String,
+  },
+  subjectsTaught:[
+    {
+      type: String,
+    }
+  ],
+  profilePicture:{
+    type:String,
+    // default: ,
+  },
   tempPassword: String,
+
 });
 
 //generate Password And hash
@@ -78,7 +91,7 @@ userSchema.methods.isMatch = async function (inputPass) {
   if (!this.tempPassword) return false;
 
   const isMatching = await bcrypt.compare(inputPass, this.tempPassword);
-  console.log("Comparing:", inputPass, this.tempPassword);
+  // console.log("Comparing:", inputPass, this.tempPassword);
 
   return isMatching;
 };

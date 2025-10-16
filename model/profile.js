@@ -1,0 +1,3 @@
+const profileSchema = new Schema ({
+
+})
