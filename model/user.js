@@ -55,20 +55,19 @@ const userSchema = new Schema({
     enum: ["pending", "approved", "rejected"],
     default: "pending",
   },
-  grade:{
+  grade: {
     type: String,
   },
-  subjectsTaught:[
+  subjectsTaught: [
     {
       type: String,
-    }
+    },
   ],
-  profilePicture:{
-    type:String,
+  profilePicture: {
+    type: String,
     // default: ,
   },
   tempPassword: String,
-
 });
 
 //generate Password And hash
